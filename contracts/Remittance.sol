@@ -2,11 +2,9 @@ pragma solidity ^0.4.17;
 
 contract Remittance {
 
-  
   bool killed = false;
   address owner;
   mapping(bytes32 => RemittanceInstance) instances;
-  //  mapping(address => mapping(address => bytes32) payers;
 
   struct RemittanceInstance {
     address payer;
@@ -14,18 +12,19 @@ contract Remittance {
     uint amount;
   }
 
-  event PaidEvent(uint amount,address recipient);
-  event Instantiated(bytes32 hash,address recipient);
-  event ToggleKill(bool killed);
+  event PaidEvent(uint amount,address indexed from,address indexed to);
+  event ReclaimedEvent(uint amount,address indexed from,address indexed to);
+  event Instantiated(bytes32 hash,address indexed from,address indexed to);
+  event KilledStateChange(bool killed);
 
-  function Remittance() public {
+  constructor() public {
     owner = msg.sender;
   }
 
   function createInstance(address payee,bytes32 hash) public payable {
     require(msg.value > 0);
     instances[hash] = RemittanceInstance(msg.sender,payee,msg.value);
-    Instantiated(hash,payee);
+    emit Instantiated(hash,msg.sender,payee);
   }
 
   function getInstance(address a,string pwd) private view returns (RemittanceInstance) {
@@ -42,22 +41,24 @@ contract Remittance {
     RemittanceInstance memory r = getInstance(msg.sender,password);
     require(msg.sender == r.payee);
     msg.sender.transfer(r.amount);
-    PaidEvent(r.amount,msg.sender);
+    emit PaidEvent(r.amount,r.payer,msg.sender);
 
   }
 
   function reclaim(address payee,string password) public {
 
     RemittanceInstance memory r = getInstance(payee,password);
+    uint toPay = r.amount;
+    r.amount = 0;
     require(msg.sender == r.payer);
-    msg.sender.transfer(r.amount);
-    PaidEvent(r.amount,msg.sender);
+    msg.sender.transfer(toPay);
+    emit ReclaimedEvent(toPay,payee,msg.sender);
 
   }
 
-  function toggleKill() public {
+  function setKilled(bool _killed) public {
     require(msg.sender == owner);
-    killed = !killed;
-    ToggleKill(killed);
+    killed = _killed;
+    emit KilledStateChange(killed);
   }
 }

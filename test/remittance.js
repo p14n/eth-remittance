@@ -48,7 +48,7 @@ contract('Remittance', function ([alice,bob,carol]) {
     })
     it("should prevent withdrawl when killed",async () => {
         await remittance.createInstance(carol,hash,{from:alice,value:20000});
-        await remittance.toggleKill({ from:alice });
+        await remittance.setKilled(true,{ from:alice });
         await expectedExceptionPromise( () => remittance.withdraw("pwd",{ from: carol}))
 
     })
@@ -56,8 +56,5 @@ contract('Remittance', function ([alice,bob,carol]) {
         await expectedExceptionPromise( () => remittance.withdraw("pwd",{ from: bob }))
 
     })
-
-
-
 
 });
