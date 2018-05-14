@@ -12,11 +12,28 @@ const truffleContract = require("truffle-contract");
 
 const remittanceJson = require("../../build/contracts/Remittance.json");
 
-if (typeof web3 == 'undefined') {
-    window.web3 = new Web3(web3.currentProvider);
-} else {
-    window.web3 = new Web3(new Web3.providers.HttpProvider('http://localhost:8545'));
-}
+
+window.addEventListener('load', function() {
+
+    // Checking if Web3 has been injected by the browser (Mist/MetaMask)
+    if (typeof web3 !== 'undefined') {
+        // Use Mist/MetaMask's provider
+        web3 = new Web3(web3.currentProvider);
+          
+    } else {
+        console.log('No web3? You should consider trying MetaMask!')
+        // fallback - use your fallback strategy (local node / hosted node + in-dapp id mgmt / fail)
+        web3 = new Web3(new Web3.providers.HttpProvider("http://localhost:8545"));
+          
+    }
+
+    // Now you can start your app & access web3 freely:
+    startApp()
+
+})
+
+const startApp = () => {
+
 
 Promise.promisifyAll(web3.eth, { suffix: "Promise" });
 Promise.promisifyAll(web3.utils, { suffix: "Promise" });
@@ -91,7 +108,8 @@ function eventAction(state = {}, action) {
                 .catch(failed(action));
         return {status:'creating',...state};
     case 'pay':
-        state.contract.withdraw(action.payee,web3.utils.fromAscii(action.password),{from:state.account})
+        let payhash = web3.utils.soliditySha3(state.account,action.password)
+        state.contract.withdraw(payhash,{from:state.account})
             .catch(failed(action));
         return {status:'paying',...state};
     case 'reclaim':
@@ -242,6 +260,7 @@ web3.eth.getAccountsPromise()
         if (accounts.length == 0) {
             throw new Error("No account with which to transact");
         }
+console.log(web3.eth.accounts)
         store.dispatch({type:'accountloaded',account:accounts[0]})
         return web3.eth.net;
     })
@@ -258,3 +277,4 @@ web3.eth.getAccountsPromise()
     })
     .catch(console.error);
 
+}
