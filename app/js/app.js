@@ -1,32 +1,35 @@
 import React from "react";
-import ReactDOM from "react-dom";
 import { createStore, applyMiddleware } from "redux";
 import { connect, Provider } from "react-redux";
 import logger from "redux-logger";
+import ReactDOM from "react-dom";
 import { Form, Text } from "react-form";
-const Web3 = require("web3");
-const Promise = require("bluebird");
-const truffleContract = require("truffle-contract");
-const remittanceJson = require("../../build/contracts/Remittance.json");
+import Web3 from "web3";
+import Promise from "bluebird";
+import truffleContract from "truffle-contract";
+import remittanceJson from "../../build/contracts/Remittance.json";
+
+import { EventList, Forms } from "./components";
 
 window.addEventListener("load", function() {
+  let web3js = null;
   if (typeof web3 !== "undefined") {
     // Use Mist/MetaMask's provider
-    web3 = new Web3(web3.currentProvider);
+    web3js = new Web3(web3.currentProvider);
   } else {
-    web3 = new Web3(new Web3.providers.HttpProvider("http://localhost:8545"));
+    web3js = new Web3(new Web3.providers.HttpProvider("http://localhost:8545"));
   }
 
-  startApp();
+  startApp(web3js);
 });
 
-const startApp = () => {
-  Promise.promisifyAll(web3.eth, { suffix: "Promise" });
-  Promise.promisifyAll(web3.utils, { suffix: "Promise" });
-  Promise.promisifyAll(web3.eth.net, { suffix: "Promise" });
+const startApp = web3js => {
+  Promise.promisifyAll(web3js.eth, { suffix: "Promise" });
+  Promise.promisifyAll(web3js.utils, { suffix: "Promise" });
+  Promise.promisifyAll(web3js.eth.net, { suffix: "Promise" });
 
   const Remittance = truffleContract(remittanceJson);
-  Remittance.setProvider(web3.currentProvider);
+  Remittance.setProvider(web3js.currentProvider);
 
   if (typeof Remittance.currentProvider.sendAsync !== "function") {
     Remittance.currentProvider.sendAsync = function() {
@@ -36,76 +39,85 @@ const startApp = () => {
       );
     };
   }
-  const asyncDispatchMiddleware = store => next => action => {
-    let syncActivityFinished = false;
-    let actionQueue = [];
 
-    function flushQueue() {
-      actionQueue.forEach(a => store.dispatch(a)); // flush queue
-      actionQueue = [];
-    }
-
-    function asyncDispatch(asyncAction) {
-      actionQueue = actionQueue.concat([asyncAction]);
-
-      if (syncActivityFinished) {
-        flushQueue();
+  web3js.eth
+    .getAccountsPromise()
+    .then(accounts => {
+      if (accounts.length == 0) {
+        throw new Error("No account with which to transact");
       }
-    }
 
-    const actionWithAsyncDispatch = Object.assign({}, action, {
-      asyncDispatch
-    });
+      return {
+        network: web3js.eth.net,
+        account: accounts[0]
+      };
+    })
+    .then(result => {
+      return Remittance.deployed().then(deployed => {
+        return {
+          deployed: deployed,
+          ...result
+        };
+      });
+    })
+    .then(({ deployed, account }) => {
+      console.log(account);
+      console.log(deployed);
+      console.log(web3js);
+      startUI(account, deployed, web3js);
+    })
+    .catch(console.error);
+};
 
-    next(actionWithAsyncDispatch);
-    syncActivityFinished = true;
-    flushQueue();
+const startUI = (account, contract, web3js) => {
+  const failed = err => {
+    return { type: "failed", error: err };
   };
 
-  const failed = action => err =>
-    action.asyncDispatch({ type: "failed", error: err });
+  const eqIgnoreCase = (v1, v2) =>
+    v1 && v2 && v1.toUpperCase() === v2.toUpperCase();
 
-  const eqIgnoreCase = (v1, v2) => v1.toUpperCase() === v2.toUpperCase();
+  const contractService = store => next => action => {
+    switch (action.type) {
+      case "create":
+        let hash = web3js.utils.soliditySha3(action.payee, action.password);
+        let value = web3js.utils.toWei(action.amount, "ether");
 
-  function eventAction(state = {}, action) {
+        contract
+          .createInstance(action.payee, hash, {
+            from: action.payer,
+            value: value
+          })
+          .catch(e => next(failed(e)));
+
+      case "pay":
+        contract
+          .withdraw(action.password, { from: action.payee })
+          .catch(e => next(failed(e)));
+
+      case "kill":
+        contract
+          .setKilled(action.killed, { from: action.account })
+          .catch(e => next(failed(e)));
+
+      case "reclaim":
+        contract
+          .reclaim(action.payee, web3js.utils.fromAscii(action.password), {
+            from: action.payer
+          })
+          .catch(e => next(failed(e)));
+      default:
+        next(action);
+    }
+  };
+
+  const eventAction = (state = {}, action) => {
     switch (action.type) {
       case "failed":
         console.log(action.error);
         return state;
       case "accountloaded":
         return { account: action.account, ...state };
-      case "contractloaded":
-        return { contract: action.contract, ...state };
-      case "create":
-        let hash = web3.utils.soliditySha3(action.payee, action.password);
-
-        state.contract
-          .createInstance(action.payee, hash, {
-            from: state.account,
-            value: action.amount
-          })
-          .catch(failed(action));
-        return { status: "creating", ...state };
-      case "pay":
-        state.contract
-          .withdraw(action.password, { from: state.account })
-          .catch(failed(action));
-        return { status: "paying", ...state };
-      case "reclaim":
-        state.contract
-          .reclaim(action.payee, web3.utils.fromAscii(action.password), {
-            from: state.account
-          })
-          .catch(failed(action));
-        return { status: "reclaming", ...state };
-      case "create":
-        state.contract
-          .createInstance(action.payee, web3.utils.fromAscii(action.password), {
-            from: state.account,
-            value: 1
-          })
-          .catch(failed);
-        return { status: "creating", ...state };
       case "event":
         if (
           !eqIgnoreCase(action.from, state.account) &&
@@ -132,50 +144,20 @@ const startApp = () => {
       default:
         return state;
     }
-  }
+  };
 
   const mapStateToProps = state => ({ ...state });
 
   const store = createStore(
     eventAction,
-    { events: [] },
-    applyMiddleware(asyncDispatchMiddleware, logger)
+    { events: [], account: account },
+    applyMiddleware(contractService, logger)
   );
 
   const mapDispatchToProps = dispatch => {
     return {
-      doNothing: () => store.dispatch({ type: "" })
+      dispatch: dispatch
     };
-  };
-
-  const EventItem = ({ children, doNothing }) => {
-    return <li onClick={doNothing}>{children}</li>;
-  };
-
-  const EventList = ({ events, doNothing }) => {
-    return (
-      <ul>
-        {events.map((event, index) => {
-          return (
-            <EventItem doNothing={doNothing} key={index}>
-              {event.name}
-            </EventItem>
-          );
-        })}
-      </ul>
-    );
-  };
-  const Forms = ({ status, killed }) => {
-    if (killed) return <KillForm />;
-    console.log("forms! " + status);
-    return (
-      <div>
-        {status ? <span /> : <CreateForm />}
-        {status == "payable" ? <PayForm /> : <span />}
-        {status == "reclaimable" ? <ReclaimForm /> : <span />}
-        <KillForm />
-      </div>
-    );
   };
 
   const VisibleEventList = connect(mapStateToProps, mapDispatchToProps)(
@@ -183,74 +165,6 @@ const startApp = () => {
   );
 
   const VisibleForms = connect(mapStateToProps, mapDispatchToProps)(Forms);
-
-  const CreateForm = () => (
-    <Form
-      onSubmit={submittedValues => {
-        store.dispatch({ type: "create", ...submittedValues });
-      }}
-    >
-      {formApi => (
-        <form onSubmit={formApi.submitForm} id="cform">
-          <label htmlFor="payee">Address</label>
-          <Text field="payee" id="payee" />
-          <label htmlFor="password">Password</label>
-          <Text field="password" id="password" />
-          <label htmlFor="amount">Amount</label>
-          <Text field="amount" id="amount" />
-          <button type="submit">Submit</button>
-        </form>
-      )}
-    </Form>
-  );
-  const PayForm = () => (
-    <Form
-      onSubmit={submittedValues => {
-        store.dispatch({ type: "pay", ...submittedValues });
-      }}
-    >
-      {formApi => (
-        <form onSubmit={formApi.submitForm} id="pform">
-          <label htmlFor="password">Password</label>
-          <Text field="password" id="password" />
-          <button type="submit">Withdraw</button>
-        </form>
-      )}
-    </Form>
-  );
-  const ReclaimForm = () => (
-    <Form
-      onSubmit={submittedValues => {
-        store.dispatch({ type: "reclaim", ...submittedValues });
-      }}
-    >
-      {formApi => (
-        <form onSubmit={formApi.submitForm} id="rform">
-          <label htmlFor="payee">Payee</label>
-          <Text field="payee" id="payee" />
-          <label htmlFor="password">Password</label>
-          <Text field="password" id="password" />
-          <button type="submit">Reclaim</button>
-        </form>
-      )}
-    </Form>
-  );
-
-  const KillForm = () => (
-    <Form
-      onSubmit={submittedValues => {
-        store.dispatch({ type: "kill", ...submittedValues });
-      }}
-    >
-      {formApi => (
-        <form onSubmit={formApi.submitForm} id="form2">
-          <label htmlFor="kill">Kill?</label>
-          <Text field="kill" id="kill" />
-          <button type="submit">Submit</button>
-        </form>
-      )}
-    </Form>
-  );
 
   ReactDOM.render(
     <Provider store={store}>
@@ -266,24 +180,9 @@ const startApp = () => {
     store.dispatch({ type: "event", name: name, ...result.args });
   };
 
-  web3.eth
-    .getAccountsPromise()
-    .then(accounts => {
-      if (accounts.length == 0) {
-        throw new Error("No account with which to transact");
-      }
-      store.dispatch({ type: "accountloaded", account: accounts[0] });
-      return web3.eth.net;
-    })
-    .then(network => {
-      return Remittance.deployed();
-    })
-    .then(deployed => {
-      deployed.PaidEvent().watch(eventToAction("paid"));
-      deployed.ReclaimedEvent().watch(eventToAction("reclaimed"));
-      deployed.Instantiated().watch(eventToAction("created"));
-      deployed.KilledStateChange().watch(eventToAction("killed"));
-      store.dispatch({ type: "contractloaded", contract: deployed });
-    })
-    .catch(console.error);
+  contract.PaidEvent().watch(eventToAction("paid"));
+  contract.ReclaimedEvent().watch(eventToAction("reclaimed"));
+  contract.Instantiated().watch(eventToAction("created"));
+  contract.KilledStateChange().watch(eventToAction("killed"));
+  store.dispatch({ type: "apploaded" });
 };
