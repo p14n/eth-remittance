@@ -3,31 +3,23 @@ import ReactDOM from 'react-dom';
 import {createStore,applyMiddleware} from 'redux';
 import {connect,Provider} from 'react-redux'
 import logger from 'redux-logger'
-
 import { Form, Text } from 'react-form';
-
 const Web3 = require("web3");
 const Promise = require("bluebird");
 const truffleContract = require("truffle-contract");
-
 const remittanceJson = require("../../build/contracts/Remittance.json");
-
 
 window.addEventListener('load', function() {
 
-    // Checking if Web3 has been injected by the browser (Mist/MetaMask)
     if (typeof web3 !== 'undefined') {
         // Use Mist/MetaMask's provider
         web3 = new Web3(web3.currentProvider);
           
     } else {
-        console.log('No web3? You should consider trying MetaMask!')
-        // fallback - use your fallback strategy (local node / hosted node + in-dapp id mgmt / fail)
         web3 = new Web3(new Web3.providers.HttpProvider("http://localhost:8545"));
           
     }
 
-    // Now you can start your app & access web3 freely:
     startApp()
 
 })
@@ -77,23 +69,11 @@ const asyncDispatchMiddleware = store => next => action => {
 
 const failed = action => err => action.asyncDispatch({type:'failed',error:err});
 
-/*
- event PaidEvent(uint amount,address indexed from,address indexed to);
- event ReclaimedEvent(uint amount,address indexed from,address indexed to);
- event Instantiated(bytes32 hash,address indexed from,address indexed to);
- event KilledStateChange(bool killed);
-
-         -> creatable
- created -> reclaimable
-         -> payable
- killed -> killed
- paid -> 
- reclaimed -> 
- */
 
 const eqIgnoreCase = (v1,v2) => v1.toUpperCase() === v2.toUpperCase()
 
 function eventAction(state = {}, action) {
+
     switch (action.type) {
     case 'failed':
         console.log(action.error);
@@ -104,12 +84,13 @@ function eventAction(state = {}, action) {
         return {contract:action.contract,...state}
     case 'create':
         let hash = web3.utils.soliditySha3(action.payee,action.password)
+
         state.contract.createInstance(action.payee,hash,{from:state.account,value:action.amount})
                 .catch(failed(action));
         return {status:'creating',...state};
     case 'pay':
-        let payhash = web3.utils.soliditySha3(state.account,action.password)
-        state.contract.withdraw(payhash,{from:state.account})
+
+        state.contract.withdraw(action.password,{from:state.account})
             .catch(failed(action));
         return {status:'paying',...state};
     case 'reclaim':
@@ -131,6 +112,8 @@ function eventAction(state = {}, action) {
             } else {
                 return {...state,events:ev,status:'payable'};
             }
+        case 'paid':
+            return {...state,events:ev,status:''};
         case 'killed':
             return {...state,events:ev,killed:action.killed};
         default:
@@ -260,12 +243,10 @@ web3.eth.getAccountsPromise()
         if (accounts.length == 0) {
             throw new Error("No account with which to transact");
         }
-console.log(web3.eth.accounts)
         store.dispatch({type:'accountloaded',account:accounts[0]})
         return web3.eth.net;
     })
     .then(network => {
-
         return Remittance.deployed();
     })
     .then(deployed => {
