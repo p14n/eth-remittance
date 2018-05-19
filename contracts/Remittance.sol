@@ -39,9 +39,11 @@ contract Remittance {
   function withdraw(string password) public {
 
     RemittanceInstance memory r = getInstance(msg.sender,password);
+    uint toPay = r.amount;
+    r.amount = 0;
     require(msg.sender == r.payee);
-    msg.sender.transfer(r.amount);
-    emit PaidEvent(r.amount,r.payer,msg.sender);
+    msg.sender.transfer(toPay);
+    emit PaidEvent(toPay,r.payer,msg.sender);
 
   }
 
